@@ -1,29 +1,46 @@
-# PodBright — Case Study
+# PodBright
 
-**PodBright converts emails, newsletters, PDFs, and web articles into personalized podcast episodes, delivered to any podcast app via a private RSS feed.**
+**Full-stack pipeline that converts emails, newsletters, PDFs, and web articles into personalized podcast episodes — delivered to any podcast app via private RSS.**
 
-Live product: [podbright.ai](https://podbright.ai) · Core repo: private · Case study: public
+[podbright.ai](https://podbright.ai) · Core repo: private · Case study: public
+
+---
+
+## Traction
+
+| Metric | Value |
+|---|---|
+| Registered users | 20 |
+| Episodes generated | 185 |
+| Weekly active users | 16 / 20 (80%) |
+| Episodes per user (total) | 9.25 avg |
+| Avg episodes / active user / week | 2 |
+| 30-day retained users | 13 / 20 (65%) |
+
+Early-stage, but the engagement ratios are what matter: 80% WAU and 65% 30-day retention on a product with no notifications, no social loop, and no re-engagement email. Users come back because the habit — forward newsletter, hear it on the commute — works. 185 episodes from 20 users means the pipeline is running, not just being demoed.
 
 ---
 
 ## Problem
 
-Knowledge workers subscribe to 10–20 newsletters but read fewer than half. The content they care about gets buried in email, saved to read-later apps that never get opened, or skimmed on a screen when they have five minutes and no cognitive bandwidth.
+Knowledge workers subscribe to 10–20 newsletters. They read fewer than half. The content isn't the problem — the format is. Newsletters are written for screens, consumed in fragments, and compete with email inbox zero. They don't fit the 40 minutes of commute or exercise time that is audio-compatible but not screen-compatible.
 
-The constraint isn't interest — it's attention format. People have 40+ minutes of commute or exercise time that is audio-compatible but not screen-compatible. Existing solutions (podcasts, audiobooks) don't cover the long-tail content that matters most to any individual.
+Existing options: save-for-later apps (Pocket, Instapaper) that become graveyards, generic TTS apps that sound like a robot reading a webpage, or nothing.
 
-The gap: personal, high-volume text content with no audio equivalent.
+The gap is personal, high-volume text content with no audio equivalent.
 
 ---
 
 ## Solution
 
-PodBright is a full-stack pipeline that converts any text content into a podcast episode indistinguishable from professionally produced audio.
+PodBright is a three-step transformation: **ingest → rewrite → synthesize**, with delivery via the distribution channel users already have (their podcast app).
+
+The critical insight is that TTS alone doesn't solve this. A newsletter read aloud verbatim is nearly unlistenable — bullet points become a list of dashes, link text ("click here") gets spoken aloud, email footers eat two minutes of dead audio. **The rewriting step is the product.** An LLM restructures the content for listening before a single byte of audio is generated: collapsing bullets into prose, removing visual artifacts, smoothing transitions, and optionally condensing to a target duration. The output sounds edited, not extracted.
 
 **Inputs:** Email forward, PDF attachment, Chrome extension (web article)  
-**Output:** Audio episode in the user's private RSS feed — available in Apple Podcasts, Overcast, Pocket Casts, AntennaPod, and any RSS-capable app
+**Output:** Private RSS feed → any podcast app (Apple Podcasts, Overcast, Pocket Casts, AntennaPod)
 
-The critical insight is that text-to-speech alone produces bad audio. Reading a newsletter aloud sounds like a robot reading a webpage because newsletters are *written* to be *read*, not heard. PodBright runs an LLM rewriting step before synthesis: removing email chrome (headers, footers, ad copy, tracking artifacts), restructuring bullet lists into prose, expanding abbreviations, and smoothing transitions. The result sounds edited, not extracted.
+User-configurable per account: voice (6 neural voices), mode (verbatim / summary), difficulty (simple / standard / technical), target duration (full / 3 / 5 / 10 min).
 
 ---
 
@@ -37,137 +54,158 @@ The critical insight is that text-to-speech alone produces bad audio. Reading a 
 
 ---
 
-## Traction
-
-| Metric | Value |
-|---|---|
-| Registered users | 20 |
-| Episodes generated | 185|
-| Weekly active users | 16 |
-| Avg episodes/user/week | 2|
-| 30-day retention | 13 |
-
-*Metrics presented are from production analytics (Supabase). Placeholders to be filled before publishing.*
-
-> **Why these metrics matter:** Episode count demonstrates actual pipeline utilization, not just signups. 30-day retention validates whether the habit forms. Avg episodes/user/week shows engagement depth.
-
----
-
 ## Product Flow
 
 ```
-1. User signs up
-   └── Gets private inbox address (inbox+<token>@podbright.ai)
-   └── Gets private RSS feed URL (/api/feed/<feed_token>)
-   └── Adds RSS feed once to their podcast app
+1. Sign up
+   ├── Assigned: private inbox address  (inbox+<token>@podbright.ai)
+   └── Assigned: private RSS feed URL   (/api/feed/<feed_token>)
+       └── User adds RSS feed once to their podcast app
 
-2. User sends content (any of three paths)
-   ├── Email forward → inbound email webhook
-   ├── PDF attachment → email webhook + PDF parser
-   └── Chrome extension → direct API call with scraped article text
+2. Send content
+   ├── Forward email / newsletter  →  inbound email webhook
+   ├── Attach PDF to email         →  same webhook, PDF parser branch
+   └── Chrome extension on article →  direct API call, scraped text
 
-3. System processes content
-   ├── Validates sender token from To: address
-   ├── Extracts clean text (strips HTML, email headers, tracking pixels)
-   ├── Checks rate limits and monthly episode cap
-   ├── Creates episode record (status: queued)
-   └── Triggers async processing
+3. Ingestion (synchronous, <2s)
+   ├── Validate sender token from To: address
+   ├── Extract clean text (MIME parse → HTML strip → minimum length check)
+   ├── Check rate limit (10/hr) and monthly cap
+   ├── Insert episode record (status: queued)
+   └── Return 200 — processing is fully async from here
 
-4. Processing pipeline (async)
-   ├── Loads user preferences (voice, mode, difficulty, target duration)
-   ├── Rewrites content for audio via LLM
-   │   ├── Verbatim mode: cleans and structures only
-   │   └── Summary mode: condenses to key points at target duration
-   ├── Generates audio via TTS API
-   ├── Uploads audio to Cloudflare R2
-   ├── Generates chapter markers (for long content)
-   ├── Fetches cover image from Unsplash
-   └── Updates episode to status: ready
+4. Processing pipeline (async, 15–45s)
+   ├── Load user preferences (voice, mode, difficulty, target_duration)
+   ├── LLM rewrite for audio
+   │   ├── Verbatim: clean, restructure, remove email chrome
+   │   └── Summary:  condense to key points at target duration
+   ├── TTS synthesis  ─────────────────────────┐
+   ├── Chapter marker generation (parallel)    │ parallel
+   ├── Unsplash cover image fetch (parallel) ──┘
+   ├── Upload audio to Cloudflare R2
+   └── Update episode: status → ready
 
 5. Delivery
-   └── Podcast app polls RSS feed
-       └── New episode appears automatically
+   └── Podcast app polls RSS feed → new episode appears automatically
+       └── Audio streamed directly from Cloudflare R2 CDN
 ```
 
 ---
 
 ## Architecture
 
-See [`docs/architecture.md`](docs/architecture.md) for full diagram.
+```mermaid
+graph TD
+    subgraph Inputs
+        A1[Email / Newsletter]
+        A2[PDF Attachment]
+        A3[Chrome Extension]
+    end
 
-### High-level components
+    subgraph API ["Next.js API Layer"]
+        B1[POST /api/webhook/email]
+        B2[POST /api/episodes/article]
+        B3[Token Auth + Rate Limiting]
+        B4[Content Extraction]
+    end
 
+    subgraph DB ["Supabase Postgres"]
+        C1[(episodes — status machine)]
+        C2[(profiles — preferences)]
+        C3[(episode_jobs — analytics)]
+    end
+
+    subgraph Pipeline ["Async Processing"]
+        D1[Load User Prefs]
+        D2[LLM Rewriter]
+        D3[TTS Synthesis]
+        D4[Chapter Generator]
+        D5[Image Fetch]
+    end
+
+    subgraph Storage ["Cloudflare R2"]
+        E1[Audio CDN]
+    end
+
+    subgraph Feed ["RSS Delivery"]
+        F1[GET /api/feed/:token]
+        F2[RSS XML]
+        F3[Podcast App]
+    end
+
+    A1 & A2 --> B1
+    A3 --> B2
+    B1 & B2 --> B3 --> B4 --> C1
+    C1 --> D1
+    C2 --> D1
+    D1 --> D2 --> D3
+    D2 --> D4
+    D2 --> D5
+    D3 --> E1
+    D3 & D4 & D5 --> C1
+    F1 --> C2 & C1 --> F2 --> F3
+    E1 --> F3
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        Inputs                               │
-│  Email/PDF Webhook    Chrome Extension    (future: API)     │
-└───────────────┬───────────────┬───────────────────────────-─┘
-                │               │
-                ▼               ▼
-┌─────────────────────────────────────────────────────────────┐
-│                   Next.js API Routes                        │
-│   /api/webhook/email    /api/episodes/article               │
-│   • Token validation    • Extension auth                    │
-│   • Content extraction  • Rate limiting                     │
-│   • Episode creation    • Monthly cap check                 │
-└───────────────────────────┬─────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────┐
-│                   Processing Pipeline                       │
-│   Supabase episodes table (status machine)                  │
-│   queued → processing → ready / failed                      │
-│                                                             │
-│   LLM Rewriter → TTS Generator → R2 Upload                 │
-└───────────────────────────┬─────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────┐
-│                     Delivery                                │
-│   /api/feed/:token → RSS XML → Podcast App                  │
-│   Cloudflare R2 → Audio file (direct CDN URL)               │
-└─────────────────────────────────────────────────────────────┘
-```
+
+**Sequence diagram and full data model:** [`docs/architecture.md`](docs/architecture.md)
 
 ### Data stores
 
-| Store | Purpose |
+| Store | What lives here |
 |---|---|
-| Supabase Postgres | Episodes, profiles, queue state, analytics |
-| Cloudflare R2 | Audio file storage and CDN delivery |
-| Supabase Auth | User authentication |
+| Supabase Postgres | Episodes, profiles, queue state, analytics events |
+| Cloudflare R2 | Audio files (5–25 MB each), served via CDN |
+| Supabase Auth | User sessions, JWT |
 
 ---
 
 ## Technical Decisions
 
-See [`docs/decisions.md`](docs/decisions.md) for full write-up.
+Full write-up with alternatives considered: [`docs/decisions.md`](docs/decisions.md)
 
-### LLM rewriting before TTS (not after)
+### 1. LLM rewrite as a first-class pipeline step — not optional cleanup
 
-The rewriting step is the core product differentiator. The decision was to run a full LLM rewrite — not a light cleanup — before synthesis. This costs more per episode (~2–4¢ in LLM tokens) but the audio quality difference is large enough to be immediately obvious. Users who heard early versions without the rewrite described the output as "robotic" and "hard to follow." The rewrite step restructures not just words but sentence rhythm, handles enumeration (converting bullet lists to spoken sequences), and removes content that is visually meaningful but aurally noisy (e.g., "Click here", link text, image captions).
+Early version: pipe raw email text directly to TTS. Result: unlistenable. Bullet points became "dash item dash item", link text was read aloud, email footers consumed two minutes. Users described it as "a robot reading a webpage."
 
-The alternative — post-processing audio — is not viable because TTS errors caused by bad input text cannot be corrected after synthesis without re-generating.
+The fix was to treat the LLM rewrite as the core transformation, not preprocessing noise reduction. The rewriter:
+- Converts bullet lists to spoken sequences
+- Removes visually-meaningful but aurally-noisy content (link text, image captions, "click here")
+- Restructures sentences for speech rhythm (shorter clauses, fewer subordinate phrases)
+- Strips email chrome (headers, footers, unsubscribe notices, tracking pixel artifacts)
+- In summary mode: extracts key points at a target duration, not just truncates
 
-### TTS provider selection
+Cost: ~2–4¢ per episode in LLM tokens. Worth it — the quality delta is immediately perceptible.
 
-Evaluated: OpenAI TTS, ElevenLabs, Unreal Speech, Google Cloud TTS.
+Post-processing audio was considered and rejected: TTS errors from bad input can't be fixed without re-generating the entire file.
 
-Chose Unreal Speech for production:
-- ~10x lower cost per character than OpenAI TTS at the same audio quality tier
-- Accepts long-form input without chunking (OpenAI has a 4096-token limit requiring stitching)
-- Low latency (<30s for a 10-minute episode)
-- Multiple neural voices with distinct character
+### 2. TTS provider: Unreal Speech over OpenAI TTS
 
-OpenAI TTS was ruled out not on quality but on economics: at scale, the per-character cost becomes the dominant infrastructure cost. ElevenLabs produces the best output but at a price point that requires a premium tier the product wasn't ready to charge for at launch.
+| Provider | Cost / 1M chars | Max input | Chunking needed |
+|---|---|---|---|
+| ElevenLabs | ~$30–60 | 5,000 chars | Yes |
+| OpenAI TTS | ~$15 | 4,096 tokens | Yes |
+| Unreal Speech | ~$1–2 | Unlimited | No |
+| Google Cloud | ~$4–16 | 5,000 bytes | Yes |
 
-### RSS delivery with token-in-URL (not authenticated)
+OpenAI TTS was ruled out not on quality but on economics and chunking. A 10,000-word newsletter is ~50,000 characters. OpenAI's 4,096-token limit requires splitting the text, synthesizing 5–8 chunks, then stitching the audio — introducing audible seam artifacts and 3–5x the API calls. Unreal Speech accepts the full document in one call and costs ~10x less per character.
 
-Podcast apps do not support OAuth, session tokens, or standard HTTP auth in a consistent way. Apple Podcasts in particular silently drops feeds that require authentication. The design decision was to use a long random token embedded in the feed URL as the access control mechanism. This trades off theoretical security (anyone with the URL can access the feed) against practical compatibility (works with every podcast app, zero friction for users). Users are warned not to share their feed URL.
+ElevenLabs produces the best output but at a price that requires a premium pricing tier the product wasn't ready to charge for at launch.
 
-### Atomic episode claiming (race condition prevention)
+Provider abstracted behind a single function — swapping requires one file change.
 
-The processing queue is implemented directly in Postgres with a status column rather than a dedicated queue service (SQS, BullMQ). The risk with this pattern is that two concurrent requests claim the same episode. The fix: the status update from `queued` → `processing` is conditional on the current status still being `queued`:
+### 3. RSS feed: token-in-URL, not authenticated
+
+Podcast apps don't support OAuth. Apple Podcasts silently drops feeds that require HTTP Basic Auth. The only access control mechanism compatible with all podcast apps is a secret embedded in the URL path itself.
+
+Tradeoff: anyone with the URL can access the feed. Mitigated by: 32-character random token (guessing is infeasible), UI warning against sharing, token regeneration available.
+
+The alternative — building a proprietary player — was rejected outright. The product's core value is working with apps users already have.
+
+### 4. Postgres as the job queue (with atomic claiming)
+
+Chose not to introduce a dedicated queue service (SQS, BullMQ) at this stage. Postgres is sufficient, and adding a queue service adds a failure surface, deployment complexity, and credentials to manage.
+
+Race condition protection for concurrent workers: the `queued → processing` transition uses a conditional update:
 
 ```sql
 UPDATE episodes SET status = 'processing'
@@ -175,166 +213,207 @@ WHERE id = $1 AND status = 'queued'
 RETURNING id;
 ```
 
-If this returns zero rows, the claim failed — another worker already claimed it. This is a single round-trip, uses Postgres row-level locking, and requires no external coordination. For the current traffic volume, Postgres as a queue is entirely sufficient. The threshold for migrating to a dedicated queue is roughly 100+ concurrent users processing simultaneously.
+Zero rows returned = episode already claimed. No external locking required. This is a single round-trip using Postgres's native row-level semantics.
 
-### Cloudflare R2 over S3
+Migration threshold: ~100 concurrent workers processing simultaneously. At current scale, nowhere near that.
 
-R2 has zero egress fees. Audio files are 5–25 MB each and are fetched by podcast apps on every episode play (apps do not reliably cache). S3 egress at scale becomes a material cost. R2's S3-compatible API required no code changes to the upload layer.
+### 5. Cloudflare R2 over S3
 
-### Fire-and-forget analytics
+Egress fees. Audio files are 5–25 MB each. Podcast apps fetch them on every play and don't reliably cache between sessions. At scale, S3 egress becomes the largest infrastructure line item. R2 has zero egress fees and an S3-compatible API — zero code changes required.
 
-All analytics writes (page views, events, episode jobs) use a fire-and-forget pattern — wrapped in `try/catch`, never awaited on the critical path, never capable of causing a 500. The reasoning: analytics data is valuable but never worth failing a user-facing request. The cost of a missed event is low; the cost of a failed episode creation because an analytics insert timed out is unacceptable.
+### 6. Fire-and-forget analytics
 
----
+All analytics writes are wrapped in `try/catch`, never awaited on the critical path. A missed event slightly degrades reporting. A failed episode creation because an analytics insert timed out destroys user trust. The asymmetry is obvious — analytics are never on the hot path.
 
-## Challenges and Tradeoffs
-
-### Email variability
-
-Inbound emails arrive in every conceivable format. HTML newsletters use undocumented layout conventions, inline styles, comment blocks, and sometimes base64-encode their content. The parser must handle:
-- Multi-part MIME (HTML + plain text; prefer plain when available)
-- Malformed HTML that `cheerio` can parse but produces garbage text
-- Forwarded email threads (quoted replies must be stripped)
-- PDF attachments treated differently from inline content
-- Tracking pixels and link redirectors that pollute extracted text
-
-The solution is a layered extraction: try plain text → fall back to HTML stripping → validate minimum length → reject with error if insufficient content found. Each failure mode produces a specific error code surfaced to the user.
-
-### Processing latency
-
-End-to-end processing (LLM rewrite + TTS + R2 upload) takes 15–45 seconds depending on content length. The challenge is user expectation: users who forward an email and immediately open their podcast app see nothing for 30 seconds.
-
-Mitigation:
-- Episode appears immediately as "Queued" in the dashboard
-- Status updates to "Processing" as soon as the job starts
-- Processing is fully async; the email webhook returns 200 in <2s
-- Podcast app polling interval is separate from processing — apps poll every 15–30 minutes anyway, so the 30s processing delay is irrelevant in steady-state usage
-
-### Cost scaling
-
-At low volume, costs are trivial. The cost inflection point is TTS — it scales linearly with character count, not user count. A user who forwards 10 long newsletters/week costs 5–10x more to serve than a user who sends 2 short ones.
-
-Mitigations:
-- Monthly episode cap (enforced pre-processing)
-- Content length cap (120,000 characters)
-- Summary mode reduces TTS input by 60–80%
-- Target duration setting (3/5/10 min) limits TTS output length directly
+Usage caps (monthly episode limit) are checked synchronously before processing — they are not analytics, they are billing constraints.
 
 ---
 
-## What I Would Build Next
+## System Constraints
 
-**Short term (product completeness)**
-- Email digest mode: batch multiple inputs from the same day into a single episode
-- Playback position sync across devices (requires a player, not just RSS)
-- Per-episode settings override (current settings are account-wide)
+Operating numbers from production:
 
-**Medium term (distribution)**
-- Zapier/Make integration for non-Gmail email clients
-- Slack and Notion as input sources
-- Shareable public episodes (opt-in)
-
-**Infrastructure (for 10x users)**
-- Separate the processing pipeline from Next.js API routes into a dedicated worker service — the current architecture runs processing inside the web process, which works but limits horizontal scaling
-- Introduce a proper job queue (BullMQ or SQS) with retries, dead-letter queues, and priority lanes
-- Pre-warm LLM connections to reduce cold-start latency on the rewriting step
-- Per-user cost tracking and automated alerts for high-cost accounts
-
-**Product intelligence**
-- Listening analytics: which episodes get completed vs abandoned
-- Auto-discovery of forwarding rules (detect newsletter patterns in inbox)
-- Voice quality personalization based on content type (technical vs narrative)
-
----
-
-## Scaling to 10x: Technical Architecture
-
-See [`docs/decisions.md#scaling`](docs/decisions.md#scaling) for full analysis.
-
-### Current bottlenecks
-
-| Bottleneck | Threshold | Mitigation |
+| Constraint | Value | Notes |
 |---|---|---|
-| LLM rewrite | ~50 concurrent jobs | Async queue; no blocking |
-| TTS API | Rate limits per account | Retry with backoff; provider-level limit negotiation |
-| Postgres as queue | ~100 concurrent workers | Migrate to BullMQ/SQS at this threshold |
-| R2 upload | None observed | R2 scales horizontally |
-| RSS feed generation | Per-request DB query | Add Redis cache on feed token; TTL 60s |
-
-### Redesign for 10x
-
-```
-Current:  Next.js API → inline processEpisode() → Postgres status updates
-
-10x:      Next.js API → enqueue job (SQS/BullMQ)
-                            ↓
-                    Dedicated worker fleet (auto-scaling)
-                            ↓
-                    Parallel: LLM rewrite + image fetch
-                            ↓
-                    TTS generation (with provider fallback)
-                            ↓
-                    R2 upload → Postgres update → push notification
-```
-
-Key additions:
-- **Worker autoscaling** based on queue depth, not request rate
-- **Provider fallback**: if primary TTS fails, retry on secondary provider
-- **Parallel enrichment**: chapter generation and image fetch run concurrently with TTS rather than sequentially
-- **Feed caching**: RSS XML cached in Redis, invalidated on new episode, eliminates per-request DB query for high-traffic feed URLs
-
-### Cost control at scale
-
-- Tiered pricing enforces caps before they hit infrastructure
-- LLM rewrite cost is the second-largest cost center after TTS; optimizing prompt token count (shorter system prompt, trimmed context) reduces it 20–30% with no quality impact
-- Summary mode is a cost-control lever as well as a UX feature — shorter TTS input = cheaper episode
-- Per-user cost tracking enables identifying outlier accounts before they cause margin problems
+| Webhook response time | <2s | Processing is fully async |
+| End-to-end processing | 15–45s | Scales with content length |
+| Cost per episode | ~$0.03–0.08 | LLM rewrite + TTS; summary mode ~60% cheaper |
+| Max content size | 120,000 chars | ~90 min read; enforced at ingestion |
+| Monthly episode cap (free) | 10 | Checked synchronously pre-processing |
+| Rate limit | 10 episodes/hour | Per-user, prevents abuse |
+| Audio file size | 5–25 MB | Varies with duration and voice |
 
 ---
 
 ## Failure Handling
 
-### Input failures (graceful)
-- Content too short → reject immediately, inform user
-- PDF encrypted → detected pre-processing, specific error message
-- Content over limit → truncated with warning, not rejected
-- HTML-only email with no extractable text → fallback chain, then reject
+### Input failures (reject fast, explain clearly)
 
-### Processing failures (recoverable)
-- LLM timeout → episode marked failed with `error_type: timeout`; user can resubmit
-- TTS API error → same pattern; error surfaced in dashboard
-- R2 upload failure → episode fails; audio not partially stored
-- All failures log structured error type + message for analytics
+| Failure | Detection point | Behaviour |
+|---|---|---|
+| Content too short (<50 chars) | Ingestion | 400, user informed |
+| Encrypted PDF | Pre-processing | Episode marked failed, error_type: encrypted_pdf |
+| HTML-only with no extractable text | Parser | Fallback chain → reject with specific error |
+| Content over 120k chars | Ingestion | 413, user informed |
+| Duplicate forward (Gmail sends twice) | — | Creates duplicate episode; user deletes via dashboard |
+
+### Processing failures (structured, recoverable)
+
+All processing failures write to `episode_jobs` with a classified `error_type`:
+
+```
+timeout | no_text | r2_upload | char_limit | encrypted_pdf | other
+```
+
+This enables per-type failure rate tracking in the admin analytics dashboard, which shows whether failures cluster around a specific input type (e.g., a spike in `encrypted_pdf` errors after users discover PDF support).
+
+Episode stays in `failed` state; user can delete and resubmit. No silent failures.
 
 ### Idempotency
-- Episode IDs are UUIDs generated at creation time
-- Duplicate email forwards (Gmail sometimes sends twice) create duplicate episodes — known issue, mitigated by displaying episode list with title so users can identify and delete duplicates
-- Processing claim is atomic: double-processing the same episode is not possible
+
+Processing claim is atomic — double-processing the same episode is impossible by construction (see decision #4). Ingestion is not idempotent (duplicate forwards create duplicate records), but this is a known edge case handled at the UI layer.
 
 ---
 
-## Why This Exists
+## What Breaks at 10x Scale
 
-Most AI product demos generate text. This project uses AI at the processing layer of a real distribution system: content arrives unpredictably, in uncontrolled formats, must be transformed to a different medium, and delivered reliably to third-party clients (podcast apps) with no retry mechanism.
+### Bottlenecks
 
-The interesting problems are not in the AI calls — they're in the plumbing: email parsing reliability, audio latency UX, cost scaling, RSS compatibility across 20+ podcast clients, and building a system that has to work on the first try for every input because there's no "undo" in a podcast app.
+| Component | Current approach | Breaks at | Signal |
+|---|---|---|---|
+| Processing | Async inside Next.js process | ~20 concurrent | Response time degrades |
+| Queue | Postgres status column | ~100 concurrent workers | Lock contention |
+| RSS feed | DB query per request | ~1,000 req/min | Query latency |
+| TTS | Single provider account | Provider rate limit | 429s from TTS API |
+| LLM rewrite | Single provider | Provider rate limit | Timeouts, queue backup |
 
-This is the kind of problem that differentiates AI product engineering from AI demos. The model is one component. The system is the product.
+### Cost explosion points
+
+TTS cost scales linearly with character count, not user count. A power user forwarding 20 long newsletters/week costs ~10x more to serve than an average user. Without per-user cost visibility, margin disappears silently.
+
+The `episode_jobs` table tracks character count, processing time, and audio size per episode per user — giving exact per-user cost attribution without external tooling.
+
+### Redesign for 10x
+
+```
+Now:
+  Webhook → createEpisode() → processEpisode() [async in web process]
+
+10x:
+  Webhook → createEpisode() → enqueue(episodeId) [returns immediately]
+                                     ↓
+                          Worker fleet (autoscales on queue depth)
+                                     ↓
+                    ┌────────────────┴────────────────┐
+               LLM rewrite                      Image fetch
+                    └────────────────┬────────────────┘
+                               TTS synthesis
+                                     ↓
+                          R2 upload → DB update → feed cache invalidation
+```
+
+Key additions:
+- **Worker autoscaling on queue depth** — not request rate, which lags
+- **RSS feed caching** — Redis, TTL 60s, invalidated per user on new episode; eliminates per-request DB query
+- **Provider fallback** — if primary TTS rate-limits, retry on secondary; never expose provider failure to users
+- **Per-user cost alerts** — flag accounts at 3x average cost/week before they become margin problems
+
+---
+
+## Challenges and Tradeoffs
+
+### Email variability is the hardest engineering problem
+
+TTS quality is predictable. Email content is not. HTML newsletters use undocumented layout conventions: div-as-paragraph, inline styles as formatting signals, nested tables, base64-encoded content, and comment blocks used as whitespace. The parser must handle all of it and still produce clean prose.
+
+The layered extraction strategy: try plain-text part → fall back to HTML strip → validate minimum length → reject with specific error. Each layer's failure produces a structured error type, not a generic "failed to parse."
+
+The unsolved edge case: newsletters that are 80% image content with minimal alt text. The parser finds the text successfully but the episode is mostly dead audio. Detection heuristic (text-to-HTML ratio below threshold) is on the roadmap.
+
+### Processing latency vs perceived latency
+
+The actual latency (15–45s) is acceptable for async delivery to a podcast app — apps poll every 15–30 minutes anyway, so the 30s processing time is irrelevant in normal usage. The perceived latency problem is the user who forwards an email and immediately opens their podcast app expecting the episode to be there.
+
+Mitigation: episode appears as "Queued" in the dashboard within 2 seconds of the webhook firing. Users see that the system has received their content. The expectation gap is between the dashboard (which is real-time) and the podcast app (which polls on its own schedule) — this is a known UX friction point.
+
+### Cost vs quality vs latency triangle
+
+Cheap TTS (Unreal Speech) → good enough quality, low cost, acceptable latency  
+Best TTS (ElevenLabs) → noticeably better quality, 20–30x cost, similar latency  
+LLM rewrite model → quality is highly sensitive to model choice; switching to a weaker model saves 40% but produces noticeably worse audio restructuring
+
+Current tradeoff: best affordable TTS + best LLM rewrite. Quality is good enough that users don't notice the TTS ceiling; they notice the rewriting quality immediately.
+
+---
+
+## Roadmap
+
+**Near term**
+- Per-episode settings override (current preferences are account-wide)
+- Email digest mode: batch same-day inputs into one episode
+- Deduplication: detect re-forwarded content by hash before processing
+
+**Distribution**
+- Zapier / Make connector for non-Gmail setups
+- Slack and Notion as input sources
+- Shareable public episodes (opt-in)
+
+**Infrastructure**
+- Decouple processing into a dedicated worker service
+- BullMQ queue with dead-letter lanes and per-type retry policies
+- Redis cache layer for RSS feed generation
+
+**Product intelligence**
+- Listening completion analytics (requires player, not just RSS)
+- Per-user cost tracking dashboard
+- Content-aware pipeline routing (auto-select difficulty and duration based on content type)
+
+---
+
+## How This Evolves into an AI Platform
+
+Full write-up: [`docs/extending-to-ai-platform.md`](docs/extending-to-ai-platform.md)
+
+The current architecture is a fixed linear pipeline. The natural evolution is making the pipeline configurable by content type:
+
+```
+Input arrives
+    ↓
+Router agent (lightweight classifier)
+    ├── Technical paper    → Technical difficulty, full length, chapter markers
+    ├── News briefing      → 3min summary, Standard difficulty
+    ├── Long-form essay    → Standard difficulty, 10min, chapters
+    └── Product changelog  → skip (user-defined filter)
+```
+
+The second extension is multi-modal output from a single processing run. The LLM rewrite step currently produces audio-optimized text. The same step branches to: audio (current), summary card, highlights export, structured notes. One newsletter → one processing cost → multiple output formats.
+
+The foundation is already in place: structured content schema, processing queue, analytics instrumentation, modular rewriting step. The extension is architectural (DAG over linear pipeline) and product (deciding which output formats to prioritize).
 
 ---
 
 ## Stack
 
-| Layer | Technology | Why |
+| Layer | Technology | Decision rationale |
 |---|---|---|
-| Frontend + API | Next.js (App Router) | Single deployment, RSC for dashboard, API routes for webhooks |
-| Database + Auth | Supabase | Postgres + Auth in one; RLS for data isolation; no separate auth service |
-| Audio storage | Cloudflare R2 | Zero egress fees; S3-compatible API |
-| TTS | Unreal Speech | Best cost/quality ratio for long-form; no chunking required |
-| LLM rewriting | OpenAI / Claude | Prompt-swappable; model selection based on cost and output quality |
-| Email ingestion | Inbound webhook | Decoupled from MX; works with any forwarding setup |
-| Mobile | React Native (Expo) | Shared type definitions with web; iOS + Android from one codebase |
+| Frontend + API | Next.js App Router | One deployment; RSC for dashboard; API routes for all webhooks |
+| Database + Auth | Supabase | Postgres + Auth + RLS in one managed service; no separate auth infrastructure |
+| Audio storage | Cloudflare R2 | Zero egress fees; S3-compatible API; no code changes from S3 |
+| TTS | Unreal Speech | ~10x cheaper than OpenAI TTS; no chunking for long-form; multiple neural voices |
+| LLM rewriting | OpenAI / Claude | Prompt-swappable; model selected on cost/quality per task |
+| Email ingestion | Inbound webhook | Decoupled from MX records; works with any email client's forwarding |
+| Mobile | React Native (Expo) | Shared TypeScript types with web; one codebase for iOS + Android |
 
 ---
 
-*This is a case study repository. The core codebase is private. All code samples are illustrative and sanitized.*
+## Why This Problem
+
+Most AI products are demos: a model call wrapped in a UI. This project is a pipeline: content arrives in uncontrolled formats from untrusted sources, must be transformed across mediums, and delivered reliably to third-party clients that don't support re-delivery.
+
+The interesting problems are not the model calls. They are email parsing reliability at the tail of the distribution, audio latency UX under async constraints, cost scaling that is linear with usage not users, and RSS compatibility across 20+ podcast clients with no common error reporting mechanism.
+
+Building and operating this at production teaches what AI system design actually requires: the model is one component, the plumbing is the product.
+
+---
+
+*Case study repository. Core codebase is private. Code samples are illustrative and sanitized.*
