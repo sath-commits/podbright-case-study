@@ -163,16 +163,16 @@ graph TD
 
 Operating numbers from production. Latency and cost figures are real; throughput capacity is estimated from provider limits.
 
-| Metric | Value | Notes |
+| Metric | Value | Design implication |
 |---|---|---|
-| Webhook response time | <2s | Processing fully async; webhook never blocks |
-| End-to-end processing | 15–45s | LLM rewrite dominates; scales with content length |
-| LLM rewrite cost | ~$0.02–0.05 / episode | Input + output tokens; summary mode ~50% cheaper |
-| TTS cost | ~$0.003–0.04 / episode | Scales with character count after rewrite |
-| Total cost per episode | ~$0.03–0.08 | Avg ~$0.05; long verbatim PDFs hit $0.12–0.15 |
-| Audio file size | 5–25 MB | Varies with duration and voice |
-| Max content size | 120,000 chars | ~90-min read equivalent; enforced at ingestion |
-| Estimated throughput | ~40–60 jobs/hr | Bounded by TTS provider rate limits |
+| Webhook response time | <2s | Async processing is non-negotiable — synchronous episode generation would timeout the webhook and break email delivery reliability |
+| End-to-end latency | 15–45s | Perceived latency is managed, not eliminated: episode appears as "Queued" in 2s; podcast apps poll every 15–30min, so the episode is ready before the app checks |
+| LLM rewrite cost | ~$0.02–0.05 / episode | The expensive step is the product — this is the line between audibly good output and "robot reading a webpage." 2–4¢ is not overhead; it's the differentiator |
+| TTS cost | ~$0.003–0.04 / episode | Provider selection (Unreal Speech, ~$1–2/1M chars) is the primary cost lever; OpenAI TTS at ~$15/1M chars makes the unit economics unworkable at any meaningful scale |
+| Total cost per episode | ~$0.03–0.08 (avg ~$0.05) | Defines paywall structure: $6/month × 40 episodes = 67% gross margin; unlimited pricing is not viable at this per-character TTS cost |
+| Audio file size | 5–25 MB | Drove R2 over S3: at 500 users × 10 plays/month, S3 egress (~$0.09/GB) alone exceeds R2's total infrastructure cost |
+| Max content size | 120,000 chars | Hard cap on worst-case per-episode cost; a 200k-char PDF uncapped would cost $0.30+ in TTS alone, collapsing margin on a single episode |
+| Estimated throughput | ~40–60 jobs/hr | Binding constraint is TTS rate limit, not compute — horizontal scaling requires provider-level negotiation or multi-provider routing, not more servers |
 
 ---
 
@@ -190,6 +190,20 @@ Operating numbers from production. Latency and cost figures are real; throughput
 **The mitigation built in:** The `episode_jobs` table tracks character count and audio size per episode per user, enabling exact per-user COGS attribution. An episode cap on paid tiers and a content length cap (120k chars) bound the worst-case outlier cost.
 
 **Planned pricing:** $6/month for 40 episodes/month. At the average $0.05/episode, this yields ~67% gross margin. Unlimited pricing is not viable at the current per-character TTS cost structure.
+
+---
+
+## Key Tradeoffs
+
+**Async processing vs synchronous expectation.** The pipeline takes 15–45s. The webhook must respond in <2s. These constraints are incompatible synchronously — the resolution is complete decoupling: ingest acknowledges immediately, processing runs independently, delivery is polling-based. This works because RSS delivery is inherently batched anyway.
+
+**RSS compatibility vs analytics depth.** Universal podcast app compatibility with zero install friction is why the habit forms and retention is high. It is also a permanent foreclosure of listening analytics. There is no play event, no completion signal, no skip data. The delivery mechanism determines what the product can learn. This tradeoff was made correctly; its full implications were not understood at the time.
+
+**LLM rewrite quality vs cost variability.** The rewrite step cannot be removed — it's the product's primary differentiator. But it's also the least cost-predictable step: a 15,000-word technical paper requires more careful transformation than a 500-word briefing, and the cost difference is invisible to the user. Prompt optimization and model tiering (lighter model for short content) are cost levers, not quality compromises.
+
+**Single-provider TTS vs resilience.** Unreal Speech is ~10x cheaper than the next viable option. The tradeoff is single-provider concentration: an outage takes down episode generation. Provider abstraction is in place (one-file swap to failover), but multi-provider hasn't been tested under real production load.
+
+**Postgres-as-queue simplicity vs future flexibility.** The current queue is an atomic SQL update — no external service, no deployment surface, no failure modes. It's the right call at current scale and the wrong call at 10x. The migration to BullMQ or SQS is architectural, not incremental, and the deferral increases the cost of that migration over time.
 
 ---
 
@@ -252,6 +266,22 @@ Usage cap checks (monthly episode limit) are synchronous and blocking — they a
 
 ---
 
+## Rejected Approaches
+
+**Real-time (synchronous) episode generation.** LLM rewrite + TTS together take 15–45s — beyond HTTP timeout tolerances and any acceptable request latency. Async with immediate acknowledgment is the only viable architecture for this pipeline depth.
+
+**Post-processing audio to fix bad TTS input.** Considered as an alternative to the LLM rewrite step. Rejected because TTS errors caused by malformed input (spoken dashes, read-aloud URLs, email footers) cannot be corrected after synthesis without regenerating the entire file. The fix must happen upstream of synthesis.
+
+**Custom HTML email parser.** Considered a purpose-built parser for newsletter HTML conventions. Rejected in favor of MIME extraction → HTML stripping → LLM cleanup, which handles the long tail of email formats (nested tables, base64, undocumented div patterns) without maintaining parser rules per newsletter. The LLM rewrite absorbs the residual artifacts.
+
+**Proprietary podcast player.** Would have enabled listening completion analytics — the RSS blind spot. Rejected because it eliminates compatibility with every podcast app users already have. Distribution advantage over analytics coverage, at this stage.
+
+**OpenAI TTS as primary provider.** Rejected not on quality but on compounding economics: 4,096-token input limit requires splitting a 10,000-word newsletter into 5–8 chunks, synthesizing each separately, then stitching — introducing audible seam artifacts and approximately 10x higher per-episode cost compared to Unreal Speech.
+
+**SQS / BullMQ at launch.** A dedicated queue adds a deployment surface, separate failure modes, and credential management with no benefit until concurrent processing demand approaches ~100 simultaneous workers. Postgres with an atomic conditional update is sufficient and the right tradeoff at current scale.
+
+---
+
 ## Failure Handling
 
 ### Input failures — reject fast, explain specifically
@@ -282,15 +312,17 @@ Processing claim is atomic — double-processing is impossible by construction (
 
 ## What Breaks at 10x Scale
 
-| Component | Current approach | Breaks at | Symptom |
-|---|---|---|---|
-| Processing | Async inside Next.js process | ~20 concurrent | Response time degrades |
-| Queue | Postgres status column | ~100 concurrent workers | Lock contention |
-| RSS feed | DB query per request | ~1,000 req/min | Query latency |
-| TTS | Single provider account | Provider rate limit | 429s, queue backup |
-| LLM rewrite | Single provider | Provider rate limit | Timeouts, stalled jobs |
+These are causal predictions, not capacity estimates. Each row identifies the mechanism of failure.
 
-**Cost explosion:** TTS cost is the dominant variable. At 10x users with average usage, monthly TTS spend scales linearly. The risk isn't average users — it's the power user tail. Ten users each generating 100 long-form episodes/month cost as much as 200 average users. Per-user cost attribution (built into `episode_jobs`) surfaces this before it becomes a margin problem, but the structural fix is episode caps on paid tiers.
+| Component | Current approach | Failure threshold | Why it breaks |
+|---|---|---|---|
+| Processing | Async inside Next.js process | ~20 concurrent | Shared process memory; concurrent jobs compete for event loop and exhaust available I/O workers |
+| Queue | Postgres status column | ~100 concurrent workers | Row-level lock contention increases; claim latency grows non-linearly as workers poll the same table |
+| RSS feed | DB query per request | ~1,000 req/min | Podcast apps poll on fixed schedules regardless of load; no caching means DB query count scales with user count, not episode count |
+| TTS | Single provider account | Provider rate limit | 429s back-pressure with no queue: jobs fail and must be retried, creating a pile-up rather than graceful degradation |
+| LLM rewrite | Single provider | Provider rate limit | Same failure mode as TTS; compound risk because both are on the critical path |
+
+**Cost explosion is a tail problem, not an average problem.** At 10x users with average usage, TTS spend scales predictably. The risk is the power user distribution: ten users each generating 100 long-form PDFs/month cost the same as 200 average users — while paying the same $6/month subscription. Per-user cost attribution is built into `episode_jobs`; the structural fix is episode caps on paid tiers, not rate limiting after the fact.
 
 ### Redesign for 10x
 
