@@ -1,0 +1,65 @@
+{
+  "_note": "Illustrative example — not real user data. Shows what a processed episode record looks like.",
+
+  "input": {
+    "source": "email_forward",
+    "subject": "The Pragmatic Engineer: How Big Tech Does On-Call",
+    "sender_name": "The Pragmatic Engineer",
+    "sender_email": "pragmaticengineer@substack.com",
+    "raw_character_count": 14823,
+    "estimated_read_time_minutes": 11
+  },
+
+  "user_settings": {
+    "voice_id": "Dan",
+    "audio_mode": "summarized",
+    "target_duration": "5min",
+    "difficulty": "standard"
+  },
+
+  "processing": {
+    "rewrite_input_chars": 14823,
+    "rewrite_output_chars": 3241,
+    "compression_ratio": 0.22,
+    "chapters_generated": [
+      { "title": "Why on-call is broken at most companies", "timestamp": 0 },
+      { "title": "How Google and Meta structure on-call rotations", "timestamp": 68 },
+      { "title": "The SLO-based alerting model", "timestamp": 142 },
+      { "title": "What smaller teams can borrow from Big Tech", "timestamp": 234 }
+    ],
+    "tts_provider": "UnrealSpeech",
+    "processing_time_ms": 18420
+  },
+
+  "episode_output": {
+    "id": "f3a1c2d4-e5b6-7890-abcd-ef1234567890",
+    "title": "The Pragmatic Engineer: How Big Tech Does On-Call",
+    "duration_seconds": 312,
+    "file_size_bytes": 5021696,
+    "audio_url": "https://cdn.example.com/audio/f3a1c2d4.mp3",
+    "image_url": "https://images.unsplash.com/photo-example",
+    "image_photographer": "Unsplash Photographer",
+    "status": "ready",
+    "published_at": "2025-04-19T08:32:11Z"
+  },
+
+  "rss_feed_entry": {
+    "title": "The Pragmatic Engineer: How Big Tech Does On-Call",
+    "description": "A look at how Google, Meta, and other large engineering organizations structure on-call rotations, set SLO-based alerting thresholds, and reduce alert fatigue — with takeaways for smaller teams.",
+    "enclosure_url": "https://cdn.example.com/audio/f3a1c2d4.mp3",
+    "enclosure_type": "audio/mpeg",
+    "enclosure_length": 5021696,
+    "itunes_duration": "00:05:12",
+    "pubDate": "Sat, 19 Apr 2025 08:32:11 +0000",
+    "guid": "f3a1c2d4-e5b6-7890-abcd-ef1234567890"
+  },
+
+  "analytics_event": {
+    "event_type": "tts_job_completed",
+    "source_type": "email",
+    "character_count": 14823,
+    "processing_time_ms": 18420,
+    "audio_size_bytes": 5021696,
+    "ai_features_used": ["tts", "summarize", "length_control", "chapters"]
+  }
+}
